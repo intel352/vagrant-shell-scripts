@@ -74,10 +74,9 @@ apt-packages-repository() {
 
 # Add a Launchpad PPA as a software source.
 apt-packages-ppa() {
-  apt-packages-repository                        \
-    "deb     http://ppa.launchpad.net/$1/ubuntu lucid main" \
-    "deb-src http://ppa.launchpad.net/$1/ubuntu lucid main" \
-    "$2" "$3"
+  which 'add-apt-repository' >/dev/null || apt-packages-install 'python-software-properties'
+  add-apt-repository "$1"
+  apt-packages-update
 }
 
 # Perform a non-interactive `apt-get` command.
@@ -96,6 +95,11 @@ apt-non-interactive() {
 # Update `aptitude` packages without any prompts.
 apt-packages-update() {
   apt-non-interactive update
+}
+
+# Upgrade `aptitude` packages without any prompts.
+apt-packages-upgrade() {
+  apt-non-interactive upgrade
 }
 
 # Perform an unattended installation of package(s).
@@ -396,18 +400,23 @@ ${code_block}
 
   # Pass PHP scripts to PHP-FPM.
   location ~ \.php\$ {
-    fastcgi_pass    unix:/var/run/php5-fpm.sock;
-    fastcgi_index   index.php;
     include         fastcgi_params;
+    fastcgi_index   index.php;
+    fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+    fastcgi_param   PATH_INFO \$fastcgi_path_info;
+    fastcgi_param   PATH_TRANSLATED \$document_root\$fastcgi_path_info;
     fastcgi_param   HTTP_AUTHORIZATION  \$http_authorization;
+    fastcgi_pass    unix:/var/run/php5-fpm-${nginx_site_name}.sock;
   }
 EOD
     )
     # Run PHP-FPM as the selected user and group.
     $SUDO sed \
+      -e 's#^\(\[[A-Za-z0-9-]\+\]\)$#['"$nginx_site_name"']#g'   \
       -e 's#^\(user\)\s*=\s*[A-Za-z0-9-]\+#\1 = '"$nginx_site_user"'#g'   \
       -e 's#^\(group\)\s*=\s*[A-Za-z0-9-]\+#\1 = '"$nginx_site_group"'#g' \
-      -i '/etc/php5/fpm/pool.d/www.conf'
+      -e 's#^\(listen\)\s*=\s*.\+$#\1 = '/var/run/php5-fpm-"$nginx_site_name"'.sock#g' \
+      <'/etc/php5/fpm/pool.d/www.conf' >'/etc/php5/fpm/pool.d/'"$nginx_site_name"'.conf'
   fi
   code_block=$( cat <<-EOD
 ${code_block}
@@ -460,6 +469,11 @@ php-pecl-install() {
   done
 }
 
+# Restart the php5-fpm server and reload with new configuration.
+php5-fpm-restart() {
+  system-service php5-fpm restart
+}
+
 # }}}
 
 # {{{ MySQL
@@ -468,6 +482,20 @@ php-pecl-install() {
 mysql-database-create() {
   log-operation "$FUNCNAME" "$@"
   mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`$1\` CHARACTER SET ${2:-utf8} COLLATE '${3:-utf8_general_ci}'"
+}
+
+# Grant access to database (creates user if not exist)
+# mysql-database-add-user databasename username password fromhost
+mysql-database-add-user() {
+  log-operation "$FUNCNAME" "$@"
+  mysql -u root -e "GRANT ALL PRIVILEGES ON \`$1\`.* TO '$2'@'${4:-localhost}' IDENTIFIED BY '$3' WITH GRANT OPTION; FLUSH PRIVILEGES;"
+}
+
+# Load data from SQL file
+# mysql-load-data databasename sqlfile
+mysql-load-data() {
+  log-operation "$FUNCNAME" "$@"
+  mysql -u root "$1" < "$2"
 }
 
 # Restore a MySQL database from an archived backup.
