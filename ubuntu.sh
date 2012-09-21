@@ -74,9 +74,8 @@ apt-packages-repository() {
 
 # Add a Launchpad PPA as a software source.
 apt-packages-ppa() {
-  which 'add-apt-repository' >/dev/null || apt-packages-install 'python-software-properties'
+  which 'add-apt-repository' >/dev/null || (apt-packages-update; apt-packages-install 'python-software-properties')
   add-apt-repository "$1"
-  apt-packages-update
 }
 
 # Perform a non-interactive `apt-get` command.
