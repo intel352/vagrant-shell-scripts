@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
-set -e
+#set -e
 
-[ -z "$SUDO" ] && SUDO='sudo'
+#[ -z "$SUDO" ] && SUDO='sudo'
+SUDO=''
 
 # {{{ Utils
 
@@ -376,7 +377,7 @@ server {
 
   root ${nginx_site_path};
 
-  error_log /var/log/nginx/error.${nginx_site_name}.log debug;
+  error_log /var/log/nginx/error.${nginx_site_name}.log error;
   access_log /var/log/nginx/access.${nginx_site_name}.log combined;
 
   index ${nginx_site_index};
