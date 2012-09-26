@@ -220,36 +220,20 @@ apache-sites-create() {
   local apache_site_user
   local apache_site_group
   local apache_site_config
-  local cgi_action
-  local cgi_apache_path
-  local cgi_system_path
   local code_block
   apache_site_name="$1"
   apache_site_path="${2:-/$apache_site_name}"
   apache_site_user="${3:-$apache_site_name}"
   apache_site_group="${4:-$apache_site_user}"
   apache_site_config="/etc/apache2/sites-available/$apache_site_name"
-  cgi_apache_path="/cgi-bin/"
-  cgi_system_path="$apache_site_path/.cgi-bin/"
-  # Create the /.cgi-bin/ directory and set permissions for SuExec.
-  $SUDO mkdir -p "$cgi_system_path"
-  $SUDO chmod 0755 "$cgi_system_path"
-  # Define a new virtual host with mod_fastcgi configured to use SuExec.
+  # Define a new virtual host
   code_block=$( cat <<-EOD
-<IfModule mod_fastcgi.c>
-  FastCgiWrapper /usr/lib/apache2/suexec
-  FastCgiConfig  -pass-header HTTP_AUTHORIZATION -autoUpdate -killInterval 120 -idle-timeout 30
-</IfModule>
-
 <VirtualHost *:80>
   DocumentRoot ${apache_site_path}
 
   LogLevel debug
   ErrorLog /var/log/apache2/error.${apache_site_name}.log
   CustomLog /var/log/apache2/access.${apache_site_name}.log combined
-
-  SuexecUserGroup ${apache_site_user} ${apache_site_group}
-  ScriptAlias ${cgi_apache_path} ${cgi_system_path}
 
   # Do not use kernel sendfile to deliver files to the client.
   EnableSendfile Off
@@ -265,30 +249,29 @@ EOD
     cgi_action="php-fcgi"
     code_block=$( cat <<-EOD
 ${code_block}
-
   <IfModule mod_fastcgi.c>
-    <Location ${cgi_apache_path}${cgi_action}>
-      SetHandler fastcgi-script
-      Options +ExecCGI +FollowSymLinks
-      Order Allow,Deny
-      Allow from all
+    <FilesMatch \.php$>
+      SetHandler php5-fcgi
+    </FilesMatch>
+    <Location "/fastcgiphp">
+      Order Deny,Allow
+      Deny from All
+      # Prevent accessing this path directly
+      Allow from env=REDIRECT_STATUS
     </Location>
-    AddHandler ${cgi_action} .php
-    Action     ${cgi_action} ${cgi_apache_path}${cgi_action}
+    Action php5-fcgi /fastcgiphp
+    Alias /fastcgiphp /usr/local/bin/${apache_site_name}.fpm_external
+    FastCgiExternalServer /usr/local/bin/${apache_site_name}.fpm_external -socket /var/run/php5-fpm-${apache_site_name}.sock -pass-header Authorization
   </IfModule>
 EOD
     )
-    $SUDO cat > "$cgi_system_path$cgi_action" <<-EOD
-#!/bin/bash
-
-export PHP_FCGI_CHILDREN=4
-export PHP_FCGI_MAX_REQUESTS=200
-
-export PHPRC="${cgi_system_path}php.ini"
-
-exec ${PHP}
-EOD
-    $SUDO chmod 0755 "$cgi_system_path$cgi_action"
+    # Run PHP-FPM as the selected user and group.
+    $SUDO sed \
+      -e 's#^\(\[[A-Za-z0-9-]\+\]\)$#['"$apache_site_name"']#g'   \
+      -e 's#^\(user\)\s*=\s*[A-Za-z0-9-]\+#\1 = '"$apache_site_user"'#g'   \
+      -e 's#^\(group\)\s*=\s*[A-Za-z0-9-]\+#\1 = '"$apache_site_group"'#g' \
+      -e 's#^\(listen\)\s*=\s*.\+$#\1 = '/var/run/php5-fpm-"$apache_site_name"'.sock#g' \
+      <'/etc/php5/fpm/pool.d/www.conf' >'/etc/php5/fpm/pool.d/'"$apache_site_name"'.conf'
   fi
   code_block=$( cat <<-EOD
 ${code_block}
@@ -298,11 +281,6 @@ EOD
   )
   # Write site configuration to Apache.
   echo "$code_block" | $SUDO tee "$apache_site_config" > /dev/null
-  # Configure permissions for /.cgi-bin/ and SuExec.
-  $SUDO chown -R "$apache_site_user":"$apache_site_group" "$cgi_system_path"
-  # Update SuExec to accept the new document root for this website.
-  grep "$apache_site_path" '/etc/apache2/suexec/www-data' > /dev/null || \
-    ( $SUDO sed -e '1s#^#'"$apache_site_path""\n"'#' -i '/etc/apache2/suexec/www-data' > /dev/null )
 }
 
 # Restart the Apache server and reload with new configuration.
